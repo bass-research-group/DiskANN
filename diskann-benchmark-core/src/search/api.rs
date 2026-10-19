@@ -309,10 +309,14 @@ where
     A: Aggregate<S::Parameters, S::Id, S::Output>,
 {
     let mut output = Vec::new();
-    for run in parameters {
+    for (run_index, run) in parameters.into_iter().enumerate() {
         let runtime = crate::tokio::runtime_with(run.setup().threads.into(), &mut on_builder)?;
+        let _ = diskann::profile::take();
 
         let reps: usize = run.setup().reps.into();
+        // Reported repetitions run with the profiler's timers off; one extra
+        // repetition below collects the breakdown.
+        diskann::profile::set_enabled(false);
         let raw = (0..reps)
             .map(|_| -> anyhow::Result<_> {
                 search(
@@ -324,6 +328,17 @@ where
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
+        if diskann::profile::ENABLED {
+            diskann::profile::set_enabled(true);
+            let _ = diskann::profile::take();
+            search(
+                object.clone(),
+                run.parameters().clone(),
+                run.setup().tasks,
+                &runtime,
+            )?;
+            print_profile(run_index, diskann::profile::take());
+        }
         output.push(aggregator.aggregate(run, raw)?);
     }
 
@@ -834,4 +849,28 @@ mod tests {
             }
         }
     }
+}
+
+/// Print one machine-readable line with the per-query search time breakdown in
+/// microseconds (see `diskann::profile`).
+fn print_profile(run_index: usize, s: diskann::profile::Snapshot) {
+    use diskann::profile::Phase;
+    let q = s.queries.max(1) as f64;
+    let us = |ticks: u64| ticks as f64 / diskann::profile::ticks_per_sec() * 1e6 / q;
+    let total = us(s.ticks[Phase::Total as usize]);
+    let compute = us(s.ticks[Phase::DistComp as usize]);
+    let enqueue = us(s.ticks[Phase::QueueMgmt as usize]);
+    println!(
+        "DISKANN_PROFILE queries={} search_us={:.3} compute_us={:.3} enqueue_us={:.3} \
+         other_us={:.3} nbr_filter_us={:.3} dist_comps={:.1} hops={:.1} run={}",
+        s.queries,
+        total,
+        compute,
+        enqueue,
+        total - compute - enqueue,
+        us(s.ticks[Phase::NbrFilter as usize]),
+        s.dist_comps as f64 / q,
+        s.hops as f64 / q,
+        run_index,
+    );
 }

@@ -7,6 +7,7 @@
 
 pub mod error;
 pub mod neighbor;
+pub mod profile;
 pub mod provider;
 pub mod tracing;
 pub mod utils;

@@ -223,6 +223,7 @@ where
         let strategy = self.strategy.get(index)?;
         let processor = self.post_processor.as_post_processor(strategy);
 
+        let t = diskann::profile::now();
         let stats = self
             .index
             .search_with(
@@ -234,6 +235,11 @@ where
                 buffer,
             )
             .await?;
+        diskann::profile::add(
+            diskann::profile::Phase::Total,
+            diskann::profile::now().wrapping_sub(t),
+        );
+        diskann::profile::count(diskann::profile::Counter::Queries, 1);
 
         Ok(Metrics {
             comparisons: stats.cmps,

@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+use crate::profile;
 use std::{
     cmp,
     collections::HashMap,
@@ -1940,6 +1941,7 @@ where
 
             // paged search can call search_internal multiple times, we only need to initialize
             // state if not already initialized.
+            let mut t = profile::now();
             if scratch.visited.is_empty() {
                 accessor
                     .start_point_distances(|id, distance| {
@@ -1948,9 +1950,11 @@ where
                         scratch.cmps += 1;
                     })
                     .await?;
+                profile::lap(profile::Phase::DistComp, &mut t);
             }
 
             let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
+            t = profile::now();
             while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
                 scratch.beam_nodes.clear();
 
@@ -1962,8 +1966,12 @@ where
                     search_record.record(closest_node, scratch.hops, scratch.cmps);
                     scratch.beam_nodes.push(*closest_node.id());
                 }
+                profile::lap(profile::Phase::QueueMgmt, &mut t);
 
                 neighbors.clear();
+                // Providers may charge their neighbor fetch / visited filtering to
+                // `NbrFilter`; the rest of `expand_beam` is distance computation.
+                let filter_before = profile::get(profile::Phase::NbrFilter);
                 accessor
                     .expand_beam(
                         scratch.beam_nodes.iter().copied(),
@@ -1971,6 +1979,18 @@ where
                         |id, distance| neighbors.push(Neighbor::new(id, distance)),
                     )
                     .await?;
+                if profile::ENABLED && t != 0 {
+                    let n = profile::now();
+                    let filter =
+                        profile::get(profile::Phase::NbrFilter).wrapping_sub(filter_before);
+                    profile::add(
+                        profile::Phase::DistComp,
+                        n.wrapping_sub(t).wrapping_sub(filter),
+                    );
+                    profile::count(profile::Counter::DistComps, neighbors.len() as u64);
+                    profile::count(profile::Counter::Hops, scratch.beam_nodes.len() as u64);
+                    t = n;
+                }
 
                 // The predicate ensures that the contents of `neighbors` are unique.
                 //
@@ -1979,6 +1999,7 @@ where
                 neighbors
                     .iter()
                     .for_each(|neighbor| scratch.best.insert(*neighbor));
+                profile::lap(profile::Phase::QueueMgmt, &mut t);
 
                 scratch.cmps += neighbors.len() as u32;
                 scratch.hops += scratch.beam_nodes.len() as u32;

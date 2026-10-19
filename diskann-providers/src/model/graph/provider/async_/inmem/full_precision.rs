@@ -282,11 +282,16 @@ where
         let f = move || -> ANNResult<()> {
             let id_buffer = &mut self.id_buffer;
             for n in ids {
+                let t = diskann::profile::now();
                 self.provider
                     .neighbor_provider
                     .get_neighbors_sync(n.into_usize(), id_buffer)?;
 
                 id_buffer.retain(|i| pred.eval_mut(i));
+                diskann::profile::add(
+                    diskann::profile::Phase::NbrFilter,
+                    diskann::profile::now().wrapping_sub(t),
+                );
                 let len = id_buffer.len();
                 let lookahead = self.provider.base_vectors.prefetch_lookahead();
 
